@@ -52,6 +52,8 @@ export const uploadF = async (req: any, res: any, next: any) => {
             fileDisplayName: file.originalname,
             fileName: file.key,
             fileType: file.mimetype,
+            uploadDate: Date.now(),
+            status: "Created",
           };
         })
       );
