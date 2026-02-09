@@ -14,13 +14,11 @@ import {
   validatePasswordToken,
   resendPasswordSetup,
   googleCheck,
-  checkAvailableRoles,
-  unifiedLogin,
-  unifiedForgotPassword,
 } from '../controllers/authController';
 import { auth } from '../middleware/auth';
 import { rbacAuth, getCurrentUser } from '../middleware/rbac';
 import { uploadF } from '../middleware/upload';
+import { User } from '../models/User';
 
 const router = express.Router();
 
@@ -214,7 +212,6 @@ router.post('/forgot-password', forgotPassword);
  *       404:
  *         description: Account not found
  */
-router.post('/unified-forgot-password', unifiedForgotPassword);
 
 /**
  * @swagger
@@ -338,13 +335,30 @@ router.get('/info', rbacAuth, async (req, res): Promise<void> => {
       return;
     }
 
-    // Build response based on user type
+    const user = await User.findById(authInfo.userId).select(
+      'firstName lastName email businessName profilePicture phoneNumber address city state country postalCode subscription',
+    );
+
     const response = {
       user: {
         id: authInfo.userId,
-        role: authInfo.role,
+        firstName: user?.firstName,
+        lastName: user?.lastName,
+        email: user?.email,
+        businessName: user?.businessName,
+        profilePicture: user?.profilePicture,
+        phoneNumber: user?.phoneNumber,
+        address: user?.address,
+        city: user?.city,
+        state: user?.state,
+        country: user?.country,
+        postalCode: user?.postalCode,
+        subscription: user?.subscription,
+        roleType: authInfo.role,
         permissions: authInfo.permissions,
         accessLevel: authInfo.accessLevel,
+        currentRole: authInfo.currentRole,
+        availableRoles: authInfo.availableRoles,
       },
     };
 
@@ -448,12 +462,6 @@ router.delete('/', auth, deleteUser);
  */
 router.put('/profile-picture', auth, uploadF, updateProfilePicture);
 
-// Unified Authentication Routes
-router.post('/check-roles', async (req, res) => {
-  await checkAvailableRoles(req, res);
-});
-router.post('/unified-login', async (req, res) => {
-  await unifiedLogin(req, res);
-});
+// Unified authentication moved to /api/unified-auth/*
 
 export default router;

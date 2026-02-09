@@ -14,15 +14,37 @@ export const generateUnifiedToken = (
   userId: string,
   roleId: string,
   email: string,
+  roleType?: UserRoleType,
+  businessOwnerId?: string,
 ): string => {
   return jwt.sign(
     {
       userId,
       roleId,
       email,
+      roleType,
+      businessOwnerId,
     },
     config.jwtSecret!,
     { expiresIn: '30d' },
+  );
+};
+
+/**
+ * Generate pre-auth token (password verified, role not selected)
+ */
+export const generatePreAuthToken = (
+  userId: string,
+  email: string,
+): string => {
+  return jwt.sign(
+    {
+      userId,
+      email,
+      tokenType: 'preauth',
+    },
+    config.jwtSecret!,
+    { expiresIn: '15m' },
   );
 };
 
@@ -78,6 +100,53 @@ const getFullDisplayName = (
 };
 
 /**
+ * Permissions matrix for unified roles
+ */
+const getRolePermissions = (
+  roleType: UserRoleType,
+  accessLevel: AccessLevel,
+): string[] => {
+  const permissionMatrix = {
+    [UserRoleType.BUSINESS_OWNER]: [
+      'read',
+      'write',
+      'delete',
+      'manage_team',
+      'billing',
+      'invite_users',
+    ],
+    [UserRoleType.ACCOUNTANT]: {
+      [AccessLevel.VIEWER]: ['read'],
+      [AccessLevel.CONTRIBUTOR]: ['read', 'write'],
+      [AccessLevel.EDITOR]: ['read', 'write', 'manage_data'],
+      [AccessLevel.ADMIN]: ['read', 'write', 'manage_data', 'manage_team'],
+    },
+    [UserRoleType.SUBCONTRACTOR]: {
+      [AccessLevel.VIEWER]: ['read'],
+      [AccessLevel.CONTRIBUTOR]: ['read', 'write', 'manage_tasks'],
+      [AccessLevel.EDITOR]: ['read', 'write', 'manage_tasks', 'manage_data'],
+      [AccessLevel.ADMIN]: ['read', 'write', 'manage_tasks', 'manage_data'],
+    },
+    [UserRoleType.ADMIN]: [
+      'read',
+      'write',
+      'delete',
+      'manage_team',
+      'billing',
+      'system_admin',
+      'invite_users',
+    ],
+  };
+
+  const rolePermissions = permissionMatrix[roleType];
+  if (Array.isArray(rolePermissions)) {
+    return rolePermissions;
+  }
+
+  return rolePermissions[accessLevel] || [];
+};
+
+/**
  * Check available roles for an email address
  */
 export const checkAvailableRoles = async (
@@ -93,7 +162,8 @@ export const checkAvailableRoles = async (
     }
 
     // Find user by email
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const normalizedEmail = email.toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
     if (!user) {
       res.json({
         success: true,
@@ -129,7 +199,7 @@ export const checkAvailableRoles = async (
         : null,
       accessLevel: role.accessLevel,
       status: role.status,
-      hasPassword: role.isPasswordSet,
+      hasPassword: user.isPasswordSet,
       displayName: getFullDisplayName(
         role.roleType,
         role.businessOwner as any,
@@ -165,69 +235,184 @@ export const unifiedLogin = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const { email, password, roleId } = req.body;
+    const { email, password } = req.body;
 
-    if (!email || !password || !roleId) {
+    if (!email || !password) {
       res.status(400).json({
-        error: 'Email, password, and role ID are required',
+        error: 'Email and password are required',
       });
       return;
     }
 
     // Find user by email
-    const user = await User.findOne({ email: email.toLowerCase() });
+    const user = await User.findOne({ email: email.toLowerCase() }).select(
+      '+password',
+    );
     if (!user) {
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
 
-    // Find the specific role
+    if (user.password && !user.isPasswordSet) {
+      user.isPasswordSet = true;
+      await user.save();
+    }
+
+    if (!user.password || !user.isPasswordSet) {
+      res.status(401).json({
+        error:
+          'Password not set. Please check your email for setup instructions.',
+        passwordNotSet: true,
+      });
+      return;
+    }
+
+    if (!user.password || !user.isPasswordSet) {
+      res.status(401).json({
+        error:
+          'Password not set. Please check your email for setup instructions.',
+        passwordNotSet: true,
+      });
+      return;
+    }
+
+    // Verify password
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    if (!isPasswordValid) {
+      res.status(401).json({ error: 'Invalid credentials' });
+      return;
+    }
+
+    // Ensure business owner role exists for legacy users
+    let availableRoles = await UserRoles.find({
+      user: user._id,
+      deleted: false,
+      status: { $in: ['invited', 'active'] },
+    }).populate('businessOwner', 'firstName lastName businessName email');
+
+    if (availableRoles.length === 0) {
+      const businessOwnerRole = new UserRoles({
+        user: user._id,
+        email: user.email,
+        roleType: UserRoleType.BUSINESS_OWNER,
+        accessLevel: AccessLevel.ADMIN,
+        status: 'active',
+      });
+      await businessOwnerRole.save();
+
+      availableRoles = await UserRoles.find({
+        user: user._id,
+        deleted: false,
+        status: { $in: ['invited', 'active'] },
+      }).populate('businessOwner', 'firstName lastName businessName email');
+    }
+
+    const mappedRoles = availableRoles.map((role) => ({
+      id: role._id.toString(),
+      type: role.roleType,
+      name: getRoleDisplayName(role.roleType, role.businessOwner),
+      businessOwner: role.businessOwner
+        ? {
+            id: (role.businessOwner as any)._id,
+            name: getFullDisplayName(
+              role.roleType,
+              role.businessOwner as any,
+              user,
+            ),
+            email: (role.businessOwner as any).email,
+          }
+        : null,
+      accessLevel: role.accessLevel,
+      status: role.status,
+    }));
+
+    const preAuthToken = generatePreAuthToken(
+      user._id.toString(),
+      user.email,
+    );
+
+    res.json({
+      success: true,
+      preAuthToken,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        businessName: user.businessName,
+      },
+      roles: mappedRoles,
+      multipleRoles: mappedRoles.length > 1,
+    });
+  } catch (error) {
+    console.error('Unified login error:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+};
+
+/**
+ * Select a role after password login
+ */
+export const selectRole = async (
+  req: Request,
+  res: Response,
+): Promise<void> => {
+  try {
+    const { roleId } = req.body;
+    const token = req.header('Authorization')?.replace('Bearer ', '');
+
+    if (!token) {
+      res.status(401).json({ error: 'Missing pre-auth token' });
+      return;
+    }
+
+    if (!roleId) {
+      res.status(400).json({ error: 'Role ID is required' });
+      return;
+    }
+
+    const decoded = jwt.verify(token, config.jwtSecret!) as {
+      userId?: string;
+      email?: string;
+      tokenType?: string;
+    };
+
+    if (!decoded.userId || decoded.tokenType !== 'preauth') {
+      res.status(401).json({ error: 'Invalid pre-auth token' });
+      return;
+    }
+
+    const user = await User.findById(decoded.userId);
+    if (!user) {
+      res.status(401).json({ error: 'User not found' });
+      return;
+    }
+
     const userRole = await UserRoles.findOne({
       _id: roleId,
       user: user._id,
       deleted: false,
       status: { $in: ['invited', 'active'] },
-    })
-      .populate('businessOwner', 'firstName lastName businessName email')
-      .select('+password');
+    }).populate('businessOwner', 'firstName lastName businessName email');
 
     if (!userRole) {
       res.status(401).json({ error: 'Invalid role or access denied' });
       return;
     }
 
-    // Check if password is set
-    if (!userRole.password || !userRole.isPasswordSet) {
-      res.status(401).json({
-        error:
-          'Password not set for this role. Please check your email for setup instructions.',
-        passwordNotSet: true,
-        roleType: userRole.roleType,
-      });
-      return;
-    }
-
-    // Verify password
-    const isPasswordValid = await (userRole as any).comparePassword(password);
-    if (!isPasswordValid) {
-      res.status(401).json({ error: 'Invalid credentials' });
-      return;
-    }
-
-    // Update status to active if it was invited
     if (userRole.status === 'invited') {
       userRole.status = 'active';
       await userRole.save();
     }
 
-    // Generate token
-    const token = generateUnifiedToken(
+    const tokenWithRole = generateUnifiedToken(
       user._id.toString(),
       userRole._id.toString(),
       user.email,
+      userRole.roleType,
+      userRole.businessOwner?._id?.toString(),
     );
 
-    // Get all available roles for this user
     const availableRoles = await UserRoles.find({
       user: user._id,
       deleted: false,
@@ -250,6 +435,7 @@ export const unifiedLogin = async (
           }
         : null,
       accessLevel: userRole.accessLevel,
+      permissions: getRolePermissions(userRole.roleType, userRole.accessLevel),
     };
 
     const mappedRoles = availableRoles.map((role) => ({
@@ -270,39 +456,32 @@ export const unifiedLogin = async (
       accessLevel: role.accessLevel,
     }));
 
-    // Response based on role type
-    if (userRole.roleType === UserRoleType.BUSINESS_OWNER) {
-      res.json({
-        success: true,
-        token,
-        user: {
-          id: user._id,
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-          businessName: user.businessName,
-        },
-        currentRole,
-        availableRoles: mappedRoles,
-        userRole: 'user', // Legacy compatibility
-        redirectTo: '/dashboard',
-      });
-    } else {
-      // External user (accountant/subcontractor)
-      res.json({
-        success: true,
-        token,
-        currentRole,
-        availableRoles: mappedRoles,
-        userRole: userRole.roleType, // accountant or subcontractor
-        redirectTo:
-          userRole.roleType === UserRoleType.ACCOUNTANT
-            ? '/transactions'
-            : '/projects',
-      });
-    }
+    res.json({
+      success: true,
+      token: tokenWithRole,
+      user: {
+        id: user._id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        businessName: user.businessName,
+      },
+      currentRole,
+      availableRoles: mappedRoles,
+      permissions: currentRole.permissions,
+      userRole:
+        userRole.roleType === UserRoleType.BUSINESS_OWNER
+          ? 'user'
+          : userRole.roleType,
+      redirectTo:
+        userRole.roleType === UserRoleType.ACCOUNTANT
+          ? '/transactions'
+          : userRole.roleType === UserRoleType.SUBCONTRACTOR
+            ? '/projects'
+            : '/dashboard',
+    });
   } catch (error) {
-    console.error('Unified login error:', error);
+    console.error('Select role error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 };
@@ -376,6 +555,7 @@ export const switchRole = async (
           }
         : null,
       accessLevel: targetRole.accessLevel,
+      permissions: getRolePermissions(targetRole.roleType, targetRole.accessLevel),
     };
 
     const mappedRoles = await UserRoles.find({
@@ -412,6 +592,7 @@ export const switchRole = async (
         businessOwnerId: targetRole.businessOwner?._id?.toString(),
       },
       availableRoles: mappedRoles,
+      permissions: currentRole.permissions,
       userRole: targetRole.roleType === UserRoleType.BUSINESS_OWNER
         ? 'user'
         : targetRole.roleType,
@@ -550,14 +731,9 @@ export const inviteUserRole = async (
         existingRole.invitedAt = new Date();
         existingRole.invitedBy = businessOwnerId as any;
 
-        // Generate new tokens
+        // Generate new invite token
         const inviteToken = jwt.sign(
           { userId: user._id, businessOwnerId, roleType },
-          config.jwtSecret!,
-          { expiresIn: '7d' },
-        );
-        const passwordSetupToken = jwt.sign(
-          { userId: user._id, roleType, setup: true },
           config.jwtSecret!,
           { expiresIn: '7d' },
         );
@@ -566,12 +742,18 @@ export const inviteUserRole = async (
         existingRole.inviteTokenExpiry = new Date(
           Date.now() + 7 * 24 * 60 * 60 * 1000,
         );
-        existingRole.passwordSetupToken = passwordSetupToken;
-        existingRole.passwordSetupTokenExpiry = new Date(
-          Date.now() + 7 * 24 * 60 * 60 * 1000,
-        );
 
         await existingRole.save();
+
+        const needsPasswordSetup = !user.isPasswordSet;
+        if (needsPasswordSetup) {
+          const passwordSetupToken = crypto.randomBytes(32).toString('hex');
+          user.passwordSetupToken = passwordSetupToken;
+          user.passwordSetupTokenExpiry = new Date(
+            Date.now() + 7 * 24 * 60 * 60 * 1000,
+          );
+          await user.save();
+        }
 
         // Populate businessOwner for email template
         await existingRole.populate(
@@ -604,15 +786,9 @@ export const inviteUserRole = async (
       }
     }
 
-    // Generate tokens
+    // Generate invite token
     const inviteToken = jwt.sign(
       { userId: user._id, businessOwnerId, roleType },
-      config.jwtSecret!,
-      { expiresIn: '7d' },
-    );
-
-    const passwordSetupToken = jwt.sign(
-      { userId: user._id, roleType, setup: true },
       config.jwtSecret!,
       { expiresIn: '7d' },
     );
@@ -627,13 +803,20 @@ export const inviteUserRole = async (
       status: 'invited',
       inviteToken,
       inviteTokenExpiry: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
-      passwordSetupToken,
-      passwordSetupTokenExpiry: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
       invitedBy: businessOwnerId as any,
       invitedAt: new Date(),
     });
 
     await userRole.save();
+
+    if (!user.isPasswordSet) {
+      const passwordSetupToken = crypto.randomBytes(32).toString('hex');
+      user.passwordSetupToken = passwordSetupToken;
+      user.passwordSetupTokenExpiry = new Date(
+        Date.now() + 7 * 24 * 60 * 60 * 1000,
+      );
+      await user.save();
+    }
 
     // Populate businessOwner for email template
     await userRole.populate(
@@ -760,83 +943,26 @@ export const setupRolePassword = async (
       return;
     }
 
-    // First, try to find token in the new unified UserRoles system
-    let userRole = await UserRoles.findOne({
-      passwordSetupToken: token,
-      passwordSetupTokenExpiry: { $gt: new Date() },
-      deleted: false,
-    }).populate('user');
-
-    if (userRole) {
-      // Handle unified system token
-      const user = userRole.user as any;
-
-      // Update user info if provided
-      if (firstName || lastName) {
-        user.firstName = firstName || user.firstName;
-        user.lastName = lastName || user.lastName;
-        await user.save();
-      }
-
-      // Set password for role
-      userRole.password = password; // Will be hashed by pre-save hook
-      userRole.isPasswordSet = true;
-      userRole.status = 'active';
-      userRole.passwordSetupToken = undefined;
-      userRole.passwordSetupTokenExpiry = undefined;
-
-      await userRole.save();
-
-      // Generate unified auth token
-      const authToken = generateUnifiedToken(
-        user._id.toString(),
-        userRole._id.toString(),
-        user.email,
-      );
-
-      res.json({
-        success: true,
-        message: 'Password set successfully',
-        roleType: userRole.roleType,
-        token: authToken,
-        user: {
-          firstName: user.firstName,
-          lastName: user.lastName,
-          email: user.email,
-        },
-      });
-      return;
-    }
-
-    // If not found in unified system, check legacy User model
+    // First, try to find token on User (password setup/reset)
     const user = await User.findOne({
       passwordSetupToken: token,
       passwordSetupTokenExpiry: { $gt: new Date() },
     });
 
     if (user) {
-      // Handle legacy system token (regular user password reset)
-
-      // Update user info if provided
       if (firstName || lastName) {
         user.firstName = firstName || user.firstName;
         user.lastName = lastName || user.lastName;
       }
 
-      // Hash password and update user
       const hashedPassword = await bcrypt.hash(password, 12);
+      user.password = hashedPassword;
+      user.isPasswordSet = true;
+      user.passwordSetupToken = undefined;
+      user.passwordSetupTokenExpiry = undefined;
+      await user.save();
 
-      // Update user with proper typing
-      await User.findByIdAndUpdate(user._id, {
-        password: hashedPassword,
-        isPasswordSet: true,
-        $unset: {
-          passwordSetupToken: 1,
-          passwordSetupTokenExpiry: 1,
-        },
-      });
-
-      // Create or update business owner role
+      // Ensure business owner role exists
       let businessOwnerRole = await UserRoles.findOne({
         user: user._id,
         roleType: UserRoleType.BUSINESS_OWNER,
@@ -844,33 +970,22 @@ export const setupRolePassword = async (
       });
 
       if (!businessOwnerRole) {
-        // Create business owner role
         businessOwnerRole = new UserRoles({
           user: user._id,
           email: user.email,
           roleType: UserRoleType.BUSINESS_OWNER,
           accessLevel: AccessLevel.ADMIN,
           status: 'active',
-          password: hashedPassword,
-          isPasswordSet: true,
         });
         await businessOwnerRole.save();
-      } else {
-        // Update existing role with password
-        await UserRoles.findByIdAndUpdate(businessOwnerRole._id, {
-          password: hashedPassword,
-          isPasswordSet: true,
-          status: 'active',
-        });
-        // Refresh the document
-        businessOwnerRole = await UserRoles.findById(businessOwnerRole._id);
       }
 
-      // Generate unified auth token using the business owner role
       const authToken = generateUnifiedToken(
         user._id.toString(),
-        businessOwnerRole!._id.toString(),
+        businessOwnerRole._id.toString(),
         user.email,
+        businessOwnerRole.roleType,
+        businessOwnerRole.businessOwner?._id?.toString(),
       );
 
       res.json({
@@ -887,7 +1002,56 @@ export const setupRolePassword = async (
       return;
     }
 
-    // Token not found in either system
+    // If not found on User, check role invite token
+    const userRole = await UserRoles.findOne({
+      inviteToken: token,
+      inviteTokenExpiry: { $gt: new Date() },
+      deleted: false,
+    }).populate('user');
+
+    if (userRole) {
+      const invitedUser = userRole.user as any;
+
+      if (firstName || lastName) {
+        invitedUser.firstName = firstName || invitedUser.firstName;
+        invitedUser.lastName = lastName || invitedUser.lastName;
+      }
+
+      if (!invitedUser.isPasswordSet) {
+        const hashedPassword = await bcrypt.hash(password, 12);
+        invitedUser.password = hashedPassword;
+        invitedUser.isPasswordSet = true;
+      }
+
+      userRole.status = 'active';
+      userRole.inviteToken = undefined;
+      userRole.inviteTokenExpiry = undefined;
+
+      await invitedUser.save();
+      await userRole.save();
+
+      const authToken = generateUnifiedToken(
+        invitedUser._id.toString(),
+        userRole._id.toString(),
+        invitedUser.email,
+        userRole.roleType,
+        userRole.businessOwner?._id?.toString(),
+      );
+
+      res.json({
+        success: true,
+        message: 'Password set successfully',
+        roleType: userRole.roleType,
+        token: authToken,
+        user: {
+          firstName: invitedUser.firstName,
+          lastName: invitedUser.lastName,
+          email: invitedUser.email,
+        },
+      });
+      return;
+    }
+
     res.status(400).json({ error: 'Invalid or expired token' });
   } catch (error) {
     console.error('Setup role password error:', error);
@@ -904,24 +1068,43 @@ export const validatePasswordToken = async (
 ): Promise<void> => {
   try {
     const { token } = req.params;
-    // First, try to find token in the new unified UserRoles system
-    let userRole = await UserRoles.findOne({
+    // First, check User password setup/reset token
+    const user = await User.findOne({
       passwordSetupToken: token,
       passwordSetupTokenExpiry: { $gt: new Date() },
-      deleted: false,
-    }).populate('user businessOwner');
+    });
 
-    if (userRole) {
-      // Found in unified system
-      const user = userRole.user as any;
-      const businessOwner = userRole.businessOwner as any;
-
+    if (user) {
       res.json({
         valid: true,
         user: {
           email: user.email,
           firstName: user.firstName,
           lastName: user.lastName,
+        },
+        roleType: 'business_owner',
+        businessOwner: null,
+      });
+      return;
+    }
+
+    // Then check role invite token
+    const userRole = await UserRoles.findOne({
+      inviteToken: token,
+      inviteTokenExpiry: { $gt: new Date() },
+      deleted: false,
+    }).populate('user businessOwner');
+
+    if (userRole) {
+      const roleUser = userRole.user as any;
+      const businessOwner = userRole.businessOwner as any;
+
+      res.json({
+        valid: true,
+        user: {
+          email: roleUser.email,
+          firstName: roleUser.firstName,
+          lastName: roleUser.lastName,
         },
         roleType: userRole.roleType,
         businessOwner: businessOwner
@@ -931,27 +1114,6 @@ export const validatePasswordToken = async (
               businessName: businessOwner.businessName,
             }
           : null,
-      });
-      return;
-    }
-
-    // If not found in unified system, check legacy User model (for password resets from old system)
-    const user = await User.findOne({
-      passwordSetupToken: token,
-      passwordSetupTokenExpiry: { $gt: new Date() },
-    });
-
-    if (user) {
-      // Found in legacy system - this is a regular user password reset
-      res.json({
-        valid: true,
-        user: {
-          email: user.email,
-          firstName: user.firstName,
-          lastName: user.lastName,
-        },
-        roleType: 'business_owner', // Legacy users are business owners
-        businessOwner: null,
       });
       return;
     }
@@ -978,61 +1140,28 @@ export const unifiedForgotPassword = async (
   res: Response,
 ): Promise<void> => {
   try {
-    const { email, roleId } = req.body;
+    const { email } = req.body;
 
     if (!email) {
       res.status(400).json({ error: 'Email is required' });
       return;
     }
 
-    let userRole;
-
-    if (roleId) {
-      // Reset password for specific role
-      userRole = await UserRoles.findOne({
-        _id: roleId,
-        deleted: false,
-      }).populate('user businessOwner');
-
-      if (!userRole || (userRole.user as any).email !== email) {
-        res.status(404).json({ error: 'Role not found or email mismatch' });
-        return;
-      }
-    } else {
-      // Find any active role for this email
-      const user = await User.findOne({ email });
-      if (!user) {
-        res.status(404).json({ error: 'No account found with this email' });
-        return;
-      }
-
-      userRole = await UserRoles.findOne({
-        user: user._id,
-        deleted: false,
-        status: { $in: ['invited', 'active'] },
-      }).populate('user businessOwner');
-
-      if (!userRole) {
-        res.status(404).json({ error: 'No active roles found for this email' });
-        return;
-      }
+    const normalizedEmail = email.toLowerCase();
+    const user = await User.findOne({ email: normalizedEmail });
+    if (!user) {
+      res.status(404).json({ error: 'No account found with this email' });
+      return;
     }
 
-    // Generate password reset token
     const token = crypto.randomBytes(32).toString('hex');
     const expiry = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
 
-    // Save token to UserRoles
-    userRole.passwordSetupToken = token;
-    userRole.passwordSetupTokenExpiry = expiry;
-    await userRole.save();
+    user.passwordSetupToken = token;
+    user.passwordSetupTokenExpiry = expiry;
+    await user.save();
 
-    // Send password reset email
-    const user = userRole.user as any;
-    const businessOwner = userRole.businessOwner as any;
-
-    // Send password reset email using existing email service
-    const resetUrl = `${process.env.FRONTEND_URL || 'http://localhost:3000'}/setup-password/${token}`;
+    const resetUrl = `${config.frontURL}/setup-password/${token}`;
 
     await sendEmail({
       to: email,
@@ -1040,7 +1169,7 @@ export const unifiedForgotPassword = async (
       html: `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;">
           <h1 style="color: #1f2937;">Hi ${user.firstName || 'there'},</h1>
-          <p>We received a request to reset your password for your Potion ${userRole.roleType} account.</p>
+          <p>We received a request to reset your password for your Potion account.</p>
           <div style="margin: 30px 0; text-align: center;">
             <a href="${resetUrl}" style="background: #1EC64C; color: white; padding: 14px 28px; text-decoration: none; border-radius: 8px; display: inline-block; font-weight: 600;">Reset My Password</a>
           </div>
@@ -1051,13 +1180,13 @@ export const unifiedForgotPassword = async (
     });
 
     console.log(
-      `Unified password reset sent to ${email} for role ${userRole.roleType}`,
+      `Unified password reset sent to ${normalizedEmail}`,
     );
 
     res.json({
       success: true,
       message: 'Password reset email sent',
-      roleType: userRole.roleType,
+      roleType: 'business_owner',
     });
   } catch (error) {
     console.error('Unified forgot password error:', error);
@@ -1084,15 +1213,15 @@ export const sendRoleInvitationEmail = async (
         'Your Business Partner'
       : 'Your Business Partner';
 
-    const tokenForLink = userRole.passwordSetupToken || userRole.inviteToken;
-    const setupLink = isNew
+    const tokenForLink = user.passwordSetupToken || userRole.inviteToken;
+    const setupLink = tokenForLink
       ? `${config.frontURL}/setup-password/${tokenForLink}`
       : `${config.frontURL}`;
 
     let subject = '';
     let htmlContent = '';
 
-    if (userRole?.accountant && isNew) {
+    if (userRole?.roleType === UserRoleType.ACCOUNTANT && isNew) {
       subject = `Invitation: Join ${businessOwnerName}'s team as Accountant`;
       htmlContent = `
         <div style="font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width: 600px; margin: 0 auto;">
@@ -1105,7 +1234,7 @@ export const sendRoleInvitationEmail = async (
           <p style="color: #666; font-size: 14px;">This invitation will expire in 7 days. If you have any questions, contact ${businessOwnerName} directly.</p>
         </div>
       `;
-    } else if (userRole?.accountant) {
+    } else if (userRole?.roleType === UserRoleType.ACCOUNTANT) {
       subject = `Invitation: Join ${businessOwnerName}'s team as Accountant`;
       htmlContent = `
         <div style="font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; max-width: 600px; margin: 0 auto;">

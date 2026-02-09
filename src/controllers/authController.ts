@@ -74,7 +74,6 @@ import { Accountant, UserAccountantAccess } from '../models/AccountantAccess';
 import { Subcontractor } from '../models/Subcontractor';
 import { SubcontractorProjectAccess } from '../models/SubcontractorProjectAccess';
 import { Transaction } from '../models/Transaction';
-import { UserRole } from '../middleware/rbac';
 import { PlaidItem } from '../models/PlaidItem';
 import { UserRoles } from '../models/UserRoles';
 import { UserGlobalValues } from '../models/UserGlobalValues';

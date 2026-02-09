@@ -110,16 +110,18 @@ export const inviteAccountant = async (
       return;
     }
 
-    // Tokens for invitation and password setup on the role
+    // Tokens for invitation
     const inviteToken = crypto.randomBytes(32).toString('hex');
     const inviteTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-    const rolePasswordSetupToken = crypto.randomBytes(32).toString('hex');
-    const rolePasswordSetupTokenExpiry = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-
-    // Prefer an existing role password; else reuse the user's password
-    const rolePasswordToReuse =
-      existingAccountantRole?.password || (accountantUser as any).password;
+    if (!accountantUser.isPasswordSet) {
+      const passwordSetupToken = crypto.randomBytes(32).toString('hex');
+      accountantUser.passwordSetupToken = passwordSetupToken;
+      accountantUser.passwordSetupTokenExpiry = new Date(
+        Date.now() + 7 * 24 * 60 * 60 * 1000,
+      );
+      await accountantUser.save();
+    }
 
     if (userRole) {
       // Update existing role
@@ -129,15 +131,6 @@ export const inviteAccountant = async (
       userRole.invitedBy = ownerObjectId;
       userRole.inviteToken = inviteToken;
       userRole.inviteTokenExpiry = inviteTokenExpiry;
-
-      // Add password-setup tokens on the role for unified flow
-      (userRole as any).passwordSetupToken = rolePasswordSetupToken;
-      (userRole as any).passwordSetupTokenExpiry = rolePasswordSetupTokenExpiry;
-
-      if (rolePasswordToReuse) {
-        userRole.password = rolePasswordToReuse;
-        userRole.isPasswordSet = true;
-      }
 
       try {
         await userRole.save();
@@ -165,11 +158,6 @@ export const inviteAccountant = async (
       invitedAt: new Date(),
       businessOwner: ownerObjectId,
       note,
-      password: rolePasswordToReuse,
-      isPasswordSet: Boolean(rolePasswordToReuse),
-      // Include role password setup tokens for the email link validation
-      passwordSetupToken: rolePasswordSetupToken,
-      passwordSetupTokenExpiry: rolePasswordSetupTokenExpiry,
     } as any);
 
     try {
@@ -219,15 +207,13 @@ export const setupAccountantAccount = async (
 
     const user = userRole.user as any;
 
-    // If a password is provided and not yet set, set it now for both user and role
-    if (password && (!user?.password || !userRole.isPasswordSet)) {
-      const hashedPassword = await bcrypt.hash(password, 10);
-      user.password = hashedPassword;
-      user.isPasswordSet = true;
-      await user.save();
-
-      userRole.password = hashedPassword;
-      userRole.isPasswordSet = true;
+      if (password && !user?.isPasswordSet) {
+        const hashedPassword = await bcrypt.hash(password, 10);
+        user.password = hashedPassword;
+        user.isPasswordSet = true;
+        user.passwordSetupToken = undefined;
+        user.passwordSetupTokenExpiry = undefined;
+        await user.save();
     }
 
     // Activate role and clear invite token
@@ -237,7 +223,7 @@ export const setupAccountantAccount = async (
     await userRole.save();
 
     return res.json({
-      message: userRole.isPasswordSet
+      message: user.isPasswordSet
         ? 'Invitation accepted successfully.'
         : 'Account setup successfully. You can now log in.',
     });

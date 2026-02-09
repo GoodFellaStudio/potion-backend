@@ -48,22 +48,15 @@ import { auth, unifiedAuth } from './middleware/auth';
 import devRoutes from './routes/devRoutes';
 import unifiedAuthRoutes from './routes/unifiedAuthRoutes';
 import externalProfileRoutes from './routes/externalProfileRoutes';
-import {
-  setupAccountantAccount,
-  accountantLogin,
-} from './controllers/accountantController';
-import { subcontractorController } from './controllers/subcontractorController';
 import { handleStripeWebhook } from './controllers/webhookController';
+import { UserRoleType } from './models/UserRoles';
 
 // Import the new RBAC middleware
 import {
   rbacAuth,
   checkWritePermission,
   enforceProjectAccess,
-  UserRole,
-  Permission,
   requireRole,
-  requirePermission,
 } from './middleware/rbac';
 import { agenda } from './queue/agenda';
 
@@ -157,14 +150,7 @@ app.use('/api/pay', stripeRoutes); // Stripe payment routes
 app.use('/api/waitlist', waitlistRoutes);
 app.use('/api/admin', adminRoutes);
 
-// LEGACY: Old external user auth routes - DEPRECATED in favor of unified auth system
-// These routes are kept for backward compatibility during transition
-app.post('/api/accountant/setup-account', setupAccountantAccount); // DEPRECATED: Use /api/unified-auth/setup-password/:token
-app.post('/api/accountant/login', accountantLogin); // DEPRECATED: Use /api/unified-auth/login
-app.post(
-  '/api/subcontractor/login',
-  subcontractorController.subcontractorLogin, // DEPRECATED: Use /api/unified-auth/login
-);
+// Legacy external user auth routes removed (use /api/unified-auth/*)
 
 // NEW: Unified authentication system routes (multi-role system)
 app.use('/api/unified-auth', unifiedAuthRoutes);
@@ -189,14 +175,14 @@ const protectedExternal = [rbacAuth, checkWritePermission];
 app.use(
   '/api/client',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   clientRoutes,
 );
 
 app.use(
   '/api/transaction',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   transactionRoutes,
 );
 
@@ -204,42 +190,46 @@ app.use(
 // app.use(
 //   '/api/transaction-category',
 //   ...protectedWithSubscription,
-//   requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+//   requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
 //   transactionCategoryRoutes,
 // );
 
 // app.use(
 //   '/api/transaction-category-messages',
 //   ...protectedWithSubscription,
-//   requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+//   requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
 //   transactionCategoryRoutes,
 // );
 
 app.use(
   '/api/plaid',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   plaidRoutes,
 );
 
 app.use(
   '/api/analytics',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   analyticsRoutes,
 );
 
 app.use(
   '/api/anomalies',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   anomalyRoutes,
 );
 
 app.use(
   '/api/project',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT, UserRole.SUBCONTRACTOR),
+  requireRole(
+    UserRoleType.BUSINESS_OWNER,
+    UserRoleType.ACCOUNTANT,
+    UserRoleType.SUBCONTRACTOR,
+  ),
   enforceProjectAccess,
   projectRoutes,
 );
@@ -247,42 +237,46 @@ app.use(
 app.use(
   '/api/contract',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   contractRoutes,
 );
 
 app.use(
   '/api/invoice',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   invoiceRoutes,
 );
 
 app.use(
   '/api/crm',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   crmRoutes,
 );
 
 app.use(
   '/api/reports',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   reportsRoutes,
 );
 
 app.use(
   '/api/timetracker',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT, UserRole.SUBCONTRACTOR),
+  requireRole(
+    UserRoleType.BUSINESS_OWNER,
+    UserRoleType.ACCOUNTANT,
+    UserRoleType.SUBCONTRACTOR,
+  ),
   timeTrackerRoutes,
 );
 
 app.use(
   '/api/chat',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   chatRoute,
 );
 
@@ -290,7 +284,7 @@ app.use(
 app.get(
   '/api/thread-suggestions',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   async (req: any, res: any) => {
     try {
       // Return predefined conversation starters
@@ -323,28 +317,28 @@ app.get(
 app.use(
   '/api/ai',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   aiRoutes,
 );
 
 app.use(
   '/api/search',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   searchRoute,
 );
 
 app.use(
   '/api/user-globals',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   globalsRoutes,
 );
 
 app.use(
   '/api/user-write-offs',
   ...protectedWithSubscription,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT),
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   userWriteOffRoutes,
 );
 
@@ -353,7 +347,7 @@ app.use(
 app.use(
   '/api/accountant',
   ...protectedExternal,
-  requireRole(UserRole.USER, UserRole.ACCOUNTANT), // Users can manage accountants, accountants can access their own data
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT), // Users can manage accountants, accountants can access their own data
   accountantRoutes,
 );
 
@@ -361,7 +355,7 @@ app.use(
 app.use(
   '/api/subcontractor',
   ...protectedExternal,
-  requireRole(UserRole.USER, UserRole.SUBCONTRACTOR), // Allow both users and subcontractors
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.SUBCONTRACTOR), // Allow both users and subcontractors
   subcontractorRoutes,
 );
 
@@ -370,7 +364,7 @@ if (process.env.NODE_ENV === 'development') {
   app.use(
     '/api/dev',
     rbacAuth,
-    requireRole(UserRole.ADMIN, UserRole.USER),
+    requireRole(UserRoleType.ADMIN, UserRoleType.BUSINESS_OWNER),
     devRoutes,
   );
 }

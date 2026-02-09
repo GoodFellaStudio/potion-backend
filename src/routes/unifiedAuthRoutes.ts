@@ -2,6 +2,7 @@ import express from 'express';
 import {
   checkAvailableRoles,
   unifiedLogin,
+  selectRole,
   switchRole,
   inviteUserRole,
   setupRolePassword,
@@ -20,6 +21,7 @@ const router = express.Router();
 // Public routes (no authentication required)
 router.post('/check-roles', checkAvailableRoles);
 router.post('/login', unifiedLogin);
+router.post('/select-role', selectRole);
 router.post('/forgot-password', unifiedForgotPassword);
 router.post('/setup-password/:token', setupRolePassword);
 router.get('/validate-token/:token', validatePasswordToken);
@@ -163,20 +165,29 @@ router.post(
         return;
       }
 
-      // Generate new tokens
-      const passwordSetupToken = crypto.randomBytes(32).toString('hex');
-      userRole.passwordSetupToken = passwordSetupToken;
-      userRole.passwordSetupTokenExpiry = new Date(
+      // Generate new invite token
+      const inviteToken = crypto.randomBytes(32).toString('hex');
+      userRole.inviteToken = inviteToken;
+      userRole.inviteTokenExpiry = new Date(
         Date.now() + 7 * 24 * 60 * 60 * 1000,
       );
       await userRole.save();
+
+      const user = userRole.user as any;
+      if (!user.isPasswordSet) {
+        user.passwordSetupToken = crypto.randomBytes(32).toString('hex');
+        user.passwordSetupTokenExpiry = new Date(
+          Date.now() + 7 * 24 * 60 * 60 * 1000,
+        );
+        await user.save();
+      }
 
       // Resend invitation email
       const { sendEmail } = await import('../services/emailService');
       const { config } = await import('../config/config');
 
-      const setupUrl = `${config.frontURL}/setup-password/${passwordSetupToken}`;
-      const user = userRole.user as any;
+      const tokenForLink = user.passwordSetupToken || userRole.inviteToken;
+      const setupUrl = `${config.frontURL}/setup-password/${tokenForLink}`;
 
       await sendEmail({
         to: user.email,

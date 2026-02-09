@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { Subcontractor } from '../models/Subcontractor';
 import { SubcontractorProjectAccess } from '../models/SubcontractorProjectAccess';
 import { Project } from '../models/Project';
+import { AccessLevel, UserRoleType } from '../models/UserRoles';
 import { sendEmail } from '../services/emailService';
 import { reactEmailService } from '../services/reactEmailService';
 import type { SubcontractorInvitationProps } from '../templates/react-email/subcontractor-invitation';
@@ -223,48 +224,49 @@ const sendSubcontractorProjectAssignedEmail = async (
  */
 export const getSubcontractorProjects = async (req: Request, res: Response) => {
   try {
-    const { subcontractorId } = req.auth!;
+    const roleType = req.auth?.roleType;
+    const projectIds = req.auth?.projectIds || [];
 
-    if (!subcontractorId) {
+    if (roleType !== UserRoleType.SUBCONTRACTOR) {
       return res.status(400).json({
-        message: 'Subcontractor ID required',
-        code: 'MISSING_SUBCONTRACTOR_ID',
+        message: 'Subcontractor role required',
+        code: 'INVALID_ROLE',
       });
     }
 
-    // Get all active project accesses for this subcontractor
-    const projectAccesses = await SubcontractorProjectAccess.find({
-      subcontractor: subcontractorId,
-      status: 'active',
+    if (!projectIds.length) {
+      return res.status(404).json({
+        message: 'No projects assigned',
+        code: 'NO_PROJECTS_ASSIGNED',
+      });
+    }
+
+    const projectsData = await Project.find({
+      _id: { $in: projectIds },
+      deleted: false,
     })
       .populate({
-        path: 'project',
-        select: 'name description status createdAt updatedAt',
-      })
-      .populate({
-        path: 'user',
+        path: 'createdBy',
         select: 'firstName lastName email businessName profilePicture',
       })
       .sort({ createdAt: -1 });
 
-    // Transform data for frontend consumption
-    const projects = projectAccesses.map((access: any) => ({
-      id: access._id,
-      projectId: access.project._id,
-      userId: access.user._id,
-      projectName: access.project.name,
-      projectDescription: access.project.description,
-      projectStatus: access.project.status,
-      clientName: `${access.user.firstName} ${access.user.lastName}`.trim(),
-      clientEmail: access.user.email,
-      clientBusinessName: access.user.businessName,
-      accessLevel: access.accessLevel,
-      role: access.role,
-      paymentTerms: access.paymentTerms,
-      startDate: access.startDate,
-      endDate: access.endDate,
-      status: access.status,
-      lastAccessed: access.updatedAt,
+    const projects = projectsData.map((project: any) => ({
+      id: project._id,
+      projectId: project._id,
+      userId: project.createdBy?._id,
+      projectName: project.name,
+      projectDescription: project.description,
+      projectStatus: project.status,
+      clientName:
+        project.createdBy?.firstName && project.createdBy?.lastName
+          ? `${project.createdBy.firstName} ${project.createdBy.lastName}`.trim()
+          : project.createdBy?.businessName || '',
+      clientEmail: project.createdBy?.email,
+      clientBusinessName: project.createdBy?.businessName,
+      accessLevel: req.auth?.accessLevel || AccessLevel.CONTRIBUTOR,
+      status: 'active',
+      lastAccessed: project.updatedAt,
     }));
 
     res.json({

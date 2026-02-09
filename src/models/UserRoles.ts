@@ -1,5 +1,4 @@
 import mongoose from 'mongoose';
-import bcrypt from 'bcryptjs';
 import { myEmitter } from '../services/eventEmitter';
 
 // Enum for all possible roles in the system
@@ -111,23 +110,6 @@ const userRolesSchema = new mongoose.Schema(
       default: 'invited',
     },
 
-    // Role-specific password (each role has its own password)
-    password: {
-      type: String,
-      select: false,
-    },
-
-    isPasswordSet: {
-      type: Boolean,
-      default: false,
-    },
-
-    // Password management tokens
-    passwordSetupToken: String,
-    passwordSetupTokenExpiry: Date,
-    passwordResetToken: String,
-    passwordResetTokenExpiry: Date,
-
     // Invitation management
     inviteToken: String,
     inviteTokenExpiry: Date,
@@ -174,8 +156,6 @@ userRolesSchema.index(
 userRolesSchema.index({ email: 1, roleType: 1, businessOwner: 1 });
 userRolesSchema.index({ businessOwner: 1, roleType: 1, status: 1 });
 userRolesSchema.index({ inviteToken: 1 });
-userRolesSchema.index({ passwordSetupToken: 1 });
-userRolesSchema.index({ passwordResetToken: 1 });
 
 // Virtual for getting role display name
 userRolesSchema.virtual('roleDisplayName').get(function () {
@@ -188,29 +168,14 @@ userRolesSchema.virtual('roleDisplayName').get(function () {
   return roleNames[this.roleType] || this.roleType;
 });
 
-// Pre-save middleware to hash password
+// Pre-save middleware to set last accessed
 userRolesSchema.pre('save', async function (next) {
-  if (this.isModified('password') && this.password) {
-    if (!this.password.startsWith('$2')) {
-      this.password = await bcrypt.hash(this.password, 12);
-    }
-    this.isPasswordSet = true;
-  }
-
   if (this.isModified('status') && this.status === 'active') {
     this.lastAccessed = new Date();
   }
 
   next();
 });
-
-// Method to compare passwords
-userRolesSchema.methods.comparePassword = async function (
-  candidatePassword: string,
-): Promise<boolean> {
-  if (!this.password) return false;
-  return bcrypt.compare(candidatePassword, this.password);
-};
 
 // Method to check if user has specific permission in this role
 userRolesSchema.methods.hasPermission = function (permission: string): boolean {

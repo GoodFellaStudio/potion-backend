@@ -10,8 +10,8 @@ import {
 import {
   checkWritePermission,
   requireRole,
-  UserRole,
 } from '../middleware/rbac';
+import { UserRoleType } from '../models/UserRoles';
 
 const router = express.Router();
 
@@ -533,7 +533,7 @@ router.post('/:id/invite', subcontractorController.inviteSubcontractor);
 // Get all projects for a subcontractor (requires subcontractor auth)
 router.get(
   '/my/projects',
-  requireRole(UserRole.SUBCONTRACTOR),
+  requireRole(UserRoleType.SUBCONTRACTOR),
   async (req, res) => {
     await getSubcontractorProjects(req, res);
   },
@@ -542,7 +542,7 @@ router.get(
 // Project assignment management (requires user auth)
 router.post(
   '/assign-to-project',
-  requireRole(UserRole.USER),
+  requireRole(UserRoleType.BUSINESS_OWNER),
   checkWritePermission,
   async (req, res) => {
     await assignSubcontractorToProject(req, res);
@@ -552,7 +552,7 @@ router.post(
 // Get all subcontractors for a specific project (requires user auth)
 router.get(
   '/by-project/:projectId',
-  requireRole(UserRole.USER),
+  requireRole(UserRoleType.BUSINESS_OWNER),
   async (req, res) => {
     await getProjectSubcontractors(req, res);
   },
@@ -561,7 +561,7 @@ router.get(
 // Remove subcontractor from project (requires user auth)
 router.delete(
   '/project-access/:accessId',
-  requireRole(UserRole.USER),
+  requireRole(UserRoleType.BUSINESS_OWNER),
   checkWritePermission,
   async (req, res) => {
     await removeSubcontractorFromProject(req, res);
@@ -571,7 +571,7 @@ router.delete(
 // Bulk assign subcontractors to project (requires user auth)
 router.post(
   '/bulk-assign',
-  requireRole(UserRole.USER),
+  requireRole(UserRoleType.BUSINESS_OWNER),
   checkWritePermission,
   async (req, res) => {
     await bulkAssignSubcontractors(req, res);
