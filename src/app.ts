@@ -50,6 +50,7 @@ import unifiedAuthRoutes from './routes/unifiedAuthRoutes';
 import externalProfileRoutes from './routes/externalProfileRoutes';
 import { handleStripeWebhook } from './controllers/webhookController';
 import { UserRoleType } from './models/UserRoles';
+import notificationRoutes from './routes/notificationRoutes';
 
 // Import the new RBAC middleware
 import {
@@ -333,6 +334,17 @@ app.use(
   ...protectedWithSubscription,
   requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   globalsRoutes,
+);
+
+app.use(
+  '/api/notifications',
+  rbacAuth,
+  requireRole(
+    UserRoleType.BUSINESS_OWNER,
+    UserRoleType.ACCOUNTANT,
+    UserRoleType.SUBCONTRACTOR,
+  ),
+  notificationRoutes,
 );
 
 app.use(

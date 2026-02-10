@@ -3,6 +3,7 @@ import { myEmitter } from '../services/eventEmitter';
 import fetch from 'node-fetch';
 import { getToken } from '../cron/getCRMAction';
 import { PerplexityService } from '../services/perplexityService';
+import { notificationService } from '../services/notificationService';
 
 const TransactionSchema = new mongoose.Schema(
   {
@@ -129,6 +130,20 @@ export const predictCategory = async (doc) => {
         aiDescription: null,
         action: 'CategoryAction',
       });
+
+      if (doc?.createdBy) {
+        await notificationService.createNotification({
+          userId: doc.createdBy.toString(),
+          level: 'warning',
+          titleKey: 'notifications.categorization_failed.title',
+          messageKey: 'notifications.categorization_failed.message',
+          params: {
+            description: doc.description || doc.counterparty || 'Transaction',
+            amount: doc.amount,
+          },
+          data: { transactionId: doc._id?.toString() },
+        });
+      }
     }
   } catch (error: any) {
     console.error('❌ Error predicting category with Perplexity:', {
@@ -142,6 +157,20 @@ export const predictCategory = async (doc) => {
         aiDescription: error?.message || 'AI categorization failed',
         action: 'CategoryAction',
       });
+
+      if (doc?.createdBy) {
+        await notificationService.createNotification({
+          userId: doc.createdBy.toString(),
+          level: 'warning',
+          titleKey: 'notifications.categorization_failed.title',
+          messageKey: 'notifications.categorization_failed.message',
+          params: {
+            description: doc.description || doc.counterparty || 'Transaction',
+            amount: doc.amount,
+          },
+          data: { transactionId: doc._id?.toString() },
+        });
+      }
     } catch (updateError) {
       console.error(
         'Failed to clear processing state and mark transaction for manual categorization:',
