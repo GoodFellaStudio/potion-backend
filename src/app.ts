@@ -51,6 +51,7 @@ import externalProfileRoutes from './routes/externalProfileRoutes';
 import { handleStripeWebhook } from './controllers/webhookController';
 import { UserRoleType } from './models/UserRoles';
 import notificationRoutes from './routes/notificationRoutes';
+import categoryRuleRoutes from './routes/categoryRuleRoutes';
 
 // Import the new RBAC middleware
 import {
@@ -334,6 +335,13 @@ app.use(
   ...protectedWithSubscription,
   requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
   globalsRoutes,
+);
+
+app.use(
+  '/api/category-rules',
+  ...protectedWithSubscription,
+  requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
+  categoryRuleRoutes,
 );
 
 app.use(

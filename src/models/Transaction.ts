@@ -4,6 +4,7 @@ import fetch from 'node-fetch';
 import { getToken } from '../cron/getCRMAction';
 import { PerplexityService } from '../services/perplexityService';
 import { notificationService } from '../services/notificationService';
+import { findMatchingCategoryRule } from '../services/categoryRuleService';
 
 const TransactionSchema = new mongoose.Schema(
   {
@@ -92,6 +93,25 @@ TransactionSchema.index({ plaidTransactionId: 1 });
 export const predictCategory = async (doc) => {
   try {
     if (doc?.category && doc.category !== aiCategoryPlaceholder) {
+      return;
+    }
+
+    const matchedRule = await findMatchingCategoryRule({
+      userId: doc.createdBy?.toString(),
+      description: doc.description,
+      counterparty: doc.counterparty,
+      amount: doc.amount,
+      bankAccount: doc.bankAccount,
+      date: doc.date,
+      project: doc.project?.toString?.(),
+    });
+
+    if (matchedRule) {
+      await Transaction.findByIdAndUpdate(doc._id.toString(), {
+        category: matchedRule.category,
+        aiDescription: null,
+        isUserConfirmed: true,
+      });
       return;
     }
 
