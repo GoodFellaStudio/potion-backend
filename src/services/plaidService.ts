@@ -186,6 +186,8 @@ export class PlaidService {
       let createdCount = 0;
       let cursor = plaidItem.transactionsCursor;
       let preservedCursor = cursor; // Keep track of the last successful cursor
+      let mutationRetries = 0;
+      const maxMutationRetries = 5;
 
       try {
         while (hasMore) {
@@ -265,8 +267,15 @@ export class PlaidService {
               error.response?.data?.error_code ===
               'TRANSACTIONS_SYNC_MUTATION_DURING_PAGINATION'
             ) {
+              mutationRetries++;
+              if (mutationRetries > maxMutationRetries) {
+                console.error(
+                  `[PlaidService] Max mutation retries (${maxMutationRetries}) exceeded, stopping sync`,
+                );
+                break;
+              }
               console.log(
-                '[PlaidService] Mutation detected during pagination, restarting from preserved cursor',
+                `[PlaidService] Mutation detected during pagination (attempt ${mutationRetries}/${maxMutationRetries}), restarting from preserved cursor`,
               );
               cursor = preservedCursor;
               continue;
@@ -275,38 +284,44 @@ export class PlaidService {
           }
         }
 
-      // Update balances after transaction sync
-      try {
-        await BalanceCalculationService.updateBalancesAfterSync(
-          plaidItem.userId.toString(),
-          plaidItemId,
-        );
-      } catch (error) {
-        console.error(
-          `[PlaidService] Error updating balances after sync:`,
-          error,
-        );
-        // Don't fail the sync if balance calculation fails
-      }
+        return createdCount;
+      } finally {
+        // Always update balances and notify for created transactions, even on partial sync
+        try {
+          await BalanceCalculationService.updateBalancesAfterSync(
+            plaidItem.userId.toString(),
+            plaidItemId,
+          );
+        } catch (error) {
+          console.error(
+            `[PlaidService] Error updating balances after sync:`,
+            error,
+          );
+        }
 
         const shouldNotify = options?.notify !== false;
         if (createdCount > 0 && shouldNotify) {
-          await notificationService.createNotification({
-            userId: plaidItem.userId.toString(),
-            level: 'success',
-            titleKey: 'notifications.new_transactions.title',
-            messageKey: 'notifications.new_transactions.message',
-            params: {
-              count: createdCount,
-              totalCount: createdCount,
-              autoCategorizedCount: createdCount,
-            },
-            data: { plaidItemId },
-          });
+          try {
+            await notificationService.createNotification({
+              userId: plaidItem.userId.toString(),
+              level: 'success',
+              titleKey: 'notifications.new_transactions.title',
+              messageKey: 'notifications.new_transactions.message',
+              params: {
+                count: createdCount,
+                totalCount: createdCount,
+                autoCategorizedCount: createdCount,
+              },
+              data: { plaidItemId },
+            });
+          } catch (error) {
+            console.error(
+              `[PlaidService] Error creating notification:`,
+              error,
+            );
+          }
         }
 
-        return createdCount;
-      } finally {
         await PlaidService.releaseSyncLock(plaidItemId, lockOwner);
       }
     } catch (error) {
