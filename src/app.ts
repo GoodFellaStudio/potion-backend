@@ -19,6 +19,7 @@ import stripeRoutes from './routes/stripeRoutes';
 import chatRoute from './routes/chatRoute';
 import accountantRoutes from './routes/accountantRoutes';
 import aiRoutes from './routes/aiRoutes';
+import aiStreamRoutes from './routes/aiStreamRoutes';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import swaggerJsdoc from 'swagger-jsdoc';
@@ -320,6 +321,7 @@ app.use(
   '/api/ai',
   ...protectedWithSubscription,
   requireRole(UserRoleType.BUSINESS_OWNER, UserRoleType.ACCOUNTANT),
+  aiStreamRoutes,
   aiRoutes,
 );
 
